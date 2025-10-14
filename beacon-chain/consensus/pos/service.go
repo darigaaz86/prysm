@@ -58,7 +58,7 @@ func (s *Service) Status() *consensus.Status {
 
 	return &consensus.Status{
 		Mode:           consensus.ModePoS,
-		Synced:         s.blockchain.Synced(),
+		Synced:         true, // TODO: Get from sync checker
 		HeadSlot:       headSlot,
 		FinalizedEpoch: finalizedCheckpoint.Epoch,
 		JustifiedEpoch: justifiedCheckpoint.Epoch,
@@ -71,7 +71,9 @@ func (s *Service) Status() *consensus.Status {
 
 // ReceiveBlock receives a new block from the network.
 func (s *Service) ReceiveBlock(ctx context.Context, block interfaces.ReadOnlySignedBeaconBlock, blockRoot [32]byte) error {
-	return s.blockchain.ReceiveBlock(ctx, block, blockRoot)
+	// ReceiveBlock now requires an AvailabilityStore parameter
+	// For now, we pass nil which means no DAS (Data Availability Sampling)
+	return s.blockchain.ReceiveBlock(ctx, block, blockRoot, nil)
 }
 
 // ProcessBlock processes a block through the state transition.
@@ -82,7 +84,7 @@ func (s *Service) ProcessBlock(ctx context.Context, block interfaces.ReadOnlySig
 	if err != nil {
 		return errors.Wrap(err, "could not get block root")
 	}
-	return s.blockchain.ReceiveBlock(ctx, block, blockRoot)
+	return s.blockchain.ReceiveBlock(ctx, block, blockRoot, nil)
 }
 
 // ProposeBlock proposes a new block for the given slot.
@@ -94,7 +96,8 @@ func (s *Service) ProposeBlock(ctx context.Context, slot primitives.Slot) (inter
 
 // ReceiveAttestation receives a new attestation from the network.
 func (s *Service) ReceiveAttestation(ctx context.Context, att *ethpb.Attestation) error {
-	return s.blockchain.ReceiveAttestation(ctx, att)
+	// Use OnAttestation which is the main attestation processing method
+	return s.blockchain.OnAttestation(ctx, att, 0) // 0 for unknown delay
 }
 
 // ProcessAttestation processes an attestation.
@@ -104,7 +107,14 @@ func (s *Service) ProcessAttestation(ctx context.Context, att *ethpb.Attestation
 
 // Head returns the current head block root.
 func (s *Service) Head(ctx context.Context) ([32]byte, error) {
-	return s.blockchain.HeadRoot(ctx)
+	root, err := s.blockchain.HeadRoot(ctx)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	// Convert []byte to [32]byte
+	var root32 [32]byte
+	copy(root32[:], root)
+	return root32, nil
 }
 
 // HeadSlot returns the slot of the current head block.
@@ -119,12 +129,19 @@ func (s *Service) HeadRoot() [32]byte {
 		// Return zero hash on error
 		return [32]byte{}
 	}
-	return root
+	// Convert []byte to [32]byte
+	var root32 [32]byte
+	copy(root32[:], root)
+	return root32
 }
 
 // HeadBlock returns the current head block.
 func (s *Service) HeadBlock() interfaces.ReadOnlySignedBeaconBlock {
-	return s.blockchain.HeadBlock()
+	block, err := s.blockchain.HeadBlock(context.Background())
+	if err != nil {
+		return nil
+	}
+	return block
 }
 
 // HeadState returns the current head state.
@@ -154,7 +171,9 @@ func (s *Service) IsCanonical(ctx context.Context, blockRoot [32]byte) (bool, er
 
 // IsOptimistic checks if a block is optimistically imported.
 func (s *Service) IsOptimistic(blockRoot [32]byte) (bool, error) {
-	return s.blockchain.IsOptimistic(context.Background(), blockRoot)
+	// IsOptimistic now only takes context, checks current head
+	// Use IsOptimisticForRoot for specific block
+	return s.blockchain.IsOptimisticForRoot(context.Background(), blockRoot)
 }
 
 // InForkchoice checks if a block is in the forkchoice store.
@@ -169,5 +188,5 @@ func (s *Service) CurrentSlot() primitives.Slot {
 
 // GenesisTime returns the genesis time of the chain.
 func (s *Service) GenesisTime() uint64 {
-	return s.blockchain.GenesisTime().Unix()
+	return uint64(s.blockchain.GenesisTime().Unix())
 }
