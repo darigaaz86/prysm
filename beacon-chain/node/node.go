@@ -25,6 +25,7 @@ import (
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/builder"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/cache"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/cache/depositsnapshot"
+	"github.com/OffchainLabs/prysm/v6/beacon-chain/consensus"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/db"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/db/filesystem"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/db/kv"
@@ -128,6 +129,9 @@ type BeaconNode struct {
 	slasherEnabled           bool
 	lcStore                  *lightclient.Store
 	ConfigOptions            []params.Option
+	consensusMode            string
+	consensusConfigPath      string
+	hotStuffConsensus        consensus.Consensus
 }
 
 // New creates a new node instance, sets up configuration options, and registers
@@ -137,6 +141,15 @@ func New(cliCtx *cli.Context, cancel context.CancelFunc, opts ...Option) (*Beaco
 		return nil, errors.Wrap(err, "could not set beacon configuration options")
 	}
 	ctx := cliCtx.Context
+
+	// Initialize consensus configuration
+	consensusMode := cliCtx.String(flags.ConsensusModeFlag.Name)
+	consensusConfigPath := cliCtx.String(flags.ConsensusConfigFlag.Name)
+
+	log.WithFields(logrus.Fields{
+		"mode":       consensusMode,
+		"configPath": consensusConfigPath,
+	}).Info("Initializing consensus layer")
 
 	beacon := &BeaconNode{
 		cliCtx:                  cliCtx,
@@ -161,6 +174,8 @@ func New(cliCtx *cli.Context, cancel context.CancelFunc, opts ...Option) (*Beaco
 		initialSyncComplete:     make(chan struct{}),
 		syncChecker:             &initialsync.SyncChecker{},
 		slasherEnabled:          cliCtx.Bool(flags.SlasherFlag.Name),
+		consensusMode:           consensusMode,
+		consensusConfigPath:     consensusConfigPath,
 	}
 
 	for _, opt := range opts {
@@ -717,6 +732,12 @@ func (b *BeaconNode) registerSlashingPoolService() error {
 }
 
 func (b *BeaconNode) registerBlockchainService(fc forkchoice.ForkChoicer, gs *startup.ClockSynchronizer, syncComplete chan struct{}) error {
+	// Check if we should use HotStuff consensus instead of PoS
+	if b.consensusMode == "hotstuff" {
+		return b.registerHotStuffConsensus(fc, gs, syncComplete)
+	}
+
+	// Default: Register standard PoS blockchain service
 	var web3Service *execution.Service
 	if err := b.services.FetchService(&web3Service); err != nil {
 		return err
@@ -761,6 +782,101 @@ func (b *BeaconNode) registerBlockchainService(fc forkchoice.ForkChoicer, gs *st
 	if err != nil {
 		return errors.Wrap(err, "could not register blockchain service")
 	}
+	return b.services.RegisterService(blockchainService)
+}
+
+func (b *BeaconNode) registerHotStuffConsensus(fc forkchoice.ForkChoicer, gs *startup.ClockSynchronizer, syncComplete chan struct{}) error {
+	log.Info("Registering HotStuff consensus service")
+
+	// Load consensus configuration
+	var consensusCfg *consensus.Config
+	var err error
+
+	if b.consensusConfigPath != "" {
+		consensusCfg, err = consensus.LoadConfigFromFile(b.consensusConfigPath)
+		if err != nil {
+			return errors.Wrap(err, "failed to load consensus config")
+		}
+	} else {
+		consensusCfg = consensus.DefaultConfig()
+		consensusCfg.Mode = consensus.ModeHotStuff
+	}
+
+	// Create consensus factory
+	factory, err := consensus.NewFactory(consensusCfg)
+	if err != nil {
+		return errors.Wrap(err, "failed to create consensus factory")
+	}
+
+	// Create HotStuff service
+	hotStuffService, err := factory.Create(b.ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to create HotStuff service")
+	}
+
+	// Start the service
+	if err := hotStuffService.Start(); err != nil {
+		return errors.Wrap(err, "failed to start HotStuff service")
+	}
+
+	// Store reference for other components to use
+	b.hotStuffConsensus = hotStuffService
+
+	log.Info("HotStuff consensus service started successfully")
+
+	// For now, we still need to register a blockchain.Service for compatibility
+	// with other services that depend on it. We'll create a minimal stub that
+	// delegates to HotStuff where possible.
+	// TODO: This is a temporary solution - eventually all services should use
+	// the Consensus interface instead of blockchain.Service directly.
+	log.Warn("HotStuff mode: Still registering blockchain.Service stub for compatibility")
+
+	// Get required services
+	var web3Service *execution.Service
+	if err := b.services.FetchService(&web3Service); err != nil {
+		return err
+	}
+
+	var attService *attestations.Service
+	if err := b.services.FetchService(&attService); err != nil {
+		return err
+	}
+
+	// Create blockchain service with all necessary options for compatibility
+	opts := append(
+		b.serviceFlagOpts.blockchainFlagOpts,
+		blockchain.WithForkChoiceStore(fc),
+		blockchain.WithDatabase(b.db),
+		blockchain.WithDepositCache(b.depositCache),
+		blockchain.WithChainStartFetcher(web3Service),
+		blockchain.WithExecutionEngineCaller(web3Service),
+		blockchain.WithAttestationCache(b.attestationCache),
+		blockchain.WithAttestationPool(b.attestationPool),
+		blockchain.WithExitPool(b.exitPool),
+		blockchain.WithSlashingPool(b.slashingsPool),
+		blockchain.WithBLSToExecPool(b.blsToExecPool),
+		blockchain.WithP2PBroadcaster(b.fetchP2P()),
+		blockchain.WithStateNotifier(b),
+		blockchain.WithAttestationService(attService),
+		blockchain.WithStateGen(b.stateGen),
+		blockchain.WithSlasherAttestationsFeed(b.slasherAttestationsFeed),
+		blockchain.WithFinalizedStateAtStartUp(b.finalizedStateAtStartUp),
+		blockchain.WithClockSynchronizer(gs),
+		blockchain.WithSyncComplete(syncComplete),
+		blockchain.WithBlobStorage(b.BlobStorage),
+		blockchain.WithDataColumnStorage(b.DataColumnStorage),
+		blockchain.WithTrackedValidatorsCache(b.trackedValidatorsCache),
+		blockchain.WithPayloadIDCache(b.payloadIDCache),
+		blockchain.WithSyncChecker(b.syncChecker),
+		blockchain.WithSlasherEnabled(b.slasherEnabled),
+		blockchain.WithLightClientStore(b.lcStore),
+	)
+
+	blockchainService, err := blockchain.NewService(b.ctx, opts...)
+	if err != nil {
+		return errors.Wrap(err, "failed to create compatibility blockchain service")
+	}
+
 	return b.services.RegisterService(blockchainService)
 }
 
@@ -994,6 +1110,7 @@ func (b *BeaconNode) registerRPCService(router *http.ServeMux) error {
 		TrackedValidatorsCache:    b.trackedValidatorsCache,
 		PayloadIDCache:            b.payloadIDCache,
 		LCStore:                   b.lcStore,
+		HotStuffConsensus:         b.hotStuffConsensus,
 	})
 
 	return b.services.RegisterService(rpcService)

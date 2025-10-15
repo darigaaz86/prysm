@@ -62,6 +62,13 @@ func (vs *Server) GetBeaconBlock(ctx context.Context, req *ethpb.BlockRequest) (
 	}
 
 	log := log.WithField("slot", req.Slot)
+
+	// Check if HotStuff consensus is available
+	if vs.HotStuffConsensus != nil {
+		log.WithField("sinceSlotStartTime", time.Since(t)).Info("🔥 HotStuff: Begin building block via HotStuff consensus")
+		return vs.getBeaconBlockHotStuff(ctx, req)
+	}
+
 	log.WithField("sinceSlotStartTime", time.Since(t)).Info("Begin building block")
 
 	// A syncing validator should not produce a block.
@@ -643,4 +650,62 @@ func blobsAndProofs(req *ethpb.GenericSignedBeaconBlock) ([][]byte, [][]byte, er
 	default:
 		return nil, nil, errors.Errorf("unknown request type provided: %T", req)
 	}
+}
+
+// getBeaconBlockHotStuff builds a block using HotStuff consensus.
+func (vs *Server) getBeaconBlockHotStuff(ctx context.Context, req *ethpb.BlockRequest) (*ethpb.GenericBeaconBlock, error) {
+	log.WithField("slot", req.Slot).Info("🔥 HotStuff: Building block via HotStuff consensus")
+
+	// Get parent state (same as PoS)
+	head, parentRoot, err := vs.getParentState(ctx, req.Slot)
+	if err != nil {
+		log.WithError(err).Error("🔥 HotStuff: Failed to get parent state")
+		return nil, err
+	}
+
+	// Create empty block structure
+	sBlk, err := getEmptyBlock(req.Slot)
+	if err != nil {
+		log.WithError(err).Error("🔥 HotStuff: Failed to get empty block")
+		return nil, status.Errorf(codes.Internal, "Could not prepare block: %v", err)
+	}
+
+	// Set basic block fields
+	sBlk.SetSlot(req.Slot)
+	sBlk.SetGraffiti(req.Graffiti)
+	sBlk.SetRandaoReveal(req.RandaoReveal)
+	sBlk.SetParentRoot(parentRoot[:])
+
+	// Set proposer index
+	idx, err := helpers.BeaconProposerIndex(ctx, head)
+	if err != nil {
+		return nil, fmt.Errorf("🔥 HotStuff: Could not calculate proposer index: %w", err)
+	}
+	sBlk.SetProposerIndex(idx)
+
+	log.WithFields(logrus.Fields{
+		"slot":          req.Slot,
+		"proposerIndex": idx,
+		"parentRoot":    fmt.Sprintf("%#x", parentRoot),
+	}).Info("🔥 HotStuff: Building block with execution payload")
+
+	// Build the block using the same parallel building logic as PoS
+	// This will create the execution payload and fill in all the block data
+	builderBoostFactor := defaultBuilderBoostFactor
+	if req.BuilderBoostFactor != nil {
+		builderBoostFactor = primitives.Gwei(req.BuilderBoostFactor.Value)
+	}
+
+	resp, err := vs.BuildBlockParallel(ctx, sBlk, head, req.SkipMevBoost, builderBoostFactor)
+	if err != nil {
+		log.WithError(err).Error("🔥 HotStuff: Failed to build block")
+		return nil, errors.Wrap(err, "could not build block in parallel")
+	}
+
+	log.WithFields(logrus.Fields{
+		"slot":          req.Slot,
+		"proposerIndex": idx,
+	}).Info("🔥 HotStuff: Successfully built block!")
+
+	return resp, nil
 }

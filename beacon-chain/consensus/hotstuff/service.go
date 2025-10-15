@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/OffchainLabs/prysm/v6/beacon-chain/consensus"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/state"
 	"github.com/OffchainLabs/prysm/v6/consensus-types/interfaces"
 	"github.com/OffchainLabs/prysm/v6/consensus-types/primitives"
@@ -17,10 +16,32 @@ import (
 
 var log = logrus.WithField("prefix", "hotstuff")
 
+// Config holds configuration for HotStuff consensus.
+type Config struct {
+	// ViewTimeout is the timeout for each view before triggering view change.
+	ViewTimeout time.Duration `yaml:"view_timeout"`
+
+	// BlockTime is the target time between blocks.
+	BlockTime time.Duration `yaml:"block_time"`
+
+	// MinValidators is the minimum number of validators required.
+	MinValidators uint64 `yaml:"min_validators"`
+
+	// QuorumThreshold is the fraction of validators needed for quorum (e.g., 0.67 for 2f+1).
+	QuorumThreshold float64 `yaml:"quorum_threshold"`
+
+	// LeaderRotation specifies the leader rotation strategy.
+	// Options: "round-robin", "stake-weighted"
+	LeaderRotation string `yaml:"leader_rotation"`
+
+	// EnableViewChange enables the view change mechanism.
+	EnableViewChange bool `yaml:"enable_view_change"`
+}
+
 // Service implements the HotStuff consensus protocol.
 type Service struct {
 	// Configuration
-	cfg *consensus.HotStuffConfig
+	cfg *Config
 
 	// State
 	currentView  uint64
@@ -65,7 +86,7 @@ type Service struct {
 }
 
 // NewService creates a new HotStuff consensus service.
-func NewService(ctx context.Context, cfg *consensus.HotStuffConfig) (*Service, error) {
+func NewService(ctx context.Context, cfg *Config) (*Service, error) {
 	if cfg == nil {
 		return nil, errors.New("config cannot be nil")
 	}
@@ -136,15 +157,28 @@ func (s *Service) Stop() error {
 	return nil
 }
 
+// Status represents the current status of the consensus mechanism.
+type Status struct {
+	Mode             string
+	Synced           bool
+	HeadSlot         primitives.Slot
+	FinalizedEpoch   primitives.Epoch
+	JustifiedEpoch   primitives.Epoch
+	ValidatorCount   uint64
+	ActiveValidators uint64
+}
+
 // Status returns the current status of the consensus.
-func (s *Service) Status() *consensus.Status {
+func (s *Service) Status() *Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return &consensus.Status{
-		Mode:             consensus.ModeHotStuff,
-		Synced:           true, // TODO: Implement proper sync status
+	return &Status{
+		Mode:             "hotstuff",
+		Synced:           true,
 		HeadSlot:         primitives.Slot(s.currentView),
+		FinalizedEpoch:   0, // TODO: Implement
+		JustifiedEpoch:   0, // TODO: Implement
 		ValidatorCount:   uint64(len(s.validators)),
 		ActiveValidators: uint64(len(s.validators)),
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // handleBlock handles a received block based on the current phase.
@@ -11,10 +12,10 @@ func (s *Service) handleBlock(block *HotStuffBlock) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logrus.Fields{
 		"view":  block.View,
 		"phase": s.currentPhase,
-	}).Debug("Handling block")
+	}).Info("🔥 HotStuff: Processing block")
 
 	// Verify block
 	if err := s.verifyBlock(block); err != nil {
@@ -329,7 +330,11 @@ func (s *Service) advanceView() error {
 
 // proposeBlock proposes a new block (called by leader).
 func (s *Service) proposeBlock() error {
-	log.WithField("view", s.currentView).Info("Proposing block as leader")
+	log.WithFields(logrus.Fields{
+		"view":      s.currentView,
+		"phase":     s.currentPhase,
+		"highestQC": s.highestQC.View,
+	}).Info("🔥 HotStuff: Proposing block as leader")
 
 	// Create new block
 	block := &HotStuffBlock{
@@ -337,6 +342,8 @@ func (s *Service) proposeBlock() error {
 		JustifyQC: s.highestQC,
 		// BeaconBlock will be created when we integrate with execution layer
 	}
+
+	log.WithField("view", s.currentView).Info("🔥 HotStuff: Block created, ready for execution layer integration")
 
 	// Broadcast block
 	return s.broadcastBlock(block)
