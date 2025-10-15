@@ -1,9 +1,11 @@
 package consensus
 
 import (
+	"os"
 	"time"
 
 	"github.com/pkg/errors"
+	"gopkg.in/yaml.v2"
 )
 
 // Config holds the configuration for the consensus mechanism.
@@ -122,4 +124,23 @@ func (c *HotStuffConfig) Validate() error {
 		return errors.Errorf("invalid leader rotation strategy: %s", c.LeaderRotation)
 	}
 	return nil
+}
+
+// LoadConfigFromFile loads consensus configuration from a YAML file.
+func LoadConfigFromFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read config file")
+	}
+
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, errors.Wrap(err, "failed to parse config file")
+	}
+
+	if err := config.Validate(); err != nil {
+		return nil, errors.Wrap(err, "invalid configuration")
+	}
+
+	return &config, nil
 }

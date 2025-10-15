@@ -153,6 +153,8 @@ var appFlags = []cli.Flag{
 	bflags.BackfillWorkerCount,
 	bflags.BackfillOldestSlot,
 	flags.BatchVerifierLimit,
+	flags.ConsensusModeFlag,
+	flags.ConsensusConfigFlag,
 }
 
 func init() {

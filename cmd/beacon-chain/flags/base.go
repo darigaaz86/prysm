@@ -344,4 +344,16 @@ var (
 		Usage: "Maximum number of signatures to batch verify at once for beacon attestation p2p gossip.",
 		Value: 1000,
 	}
+	// ConsensusModeFlag specifies which consensus mechanism to use.
+	ConsensusModeFlag = &cli.StringFlag{
+		Name:  "consensus-mode",
+		Usage: "Consensus mode to use: 'pos' for Ethereum Proof-of-Stake (default) or 'hotstuff' for HotStuff BFT consensus",
+		Value: "pos",
+	}
+	// ConsensusConfigFlag provides a path to a consensus configuration YAML file.
+	ConsensusConfigFlag = &cli.StringFlag{
+		Name:  "consensus-config",
+		Usage: "Path to consensus configuration YAML file. If not specified, default configuration for the selected mode will be used.",
+		Value: "",
+	}
 )
