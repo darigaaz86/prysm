@@ -16,12 +16,16 @@ import (
 
 var log = logrus.WithField("prefix", "hotstuff")
 
-// Config holds configuration for HotStuff consensus.
+// Config holds configuration for HotStuff 2-phase consensus.
+// The 2-phase optimization reduces consensus from 4 phases to 2 phases:
+// PROPOSE (combines PREPARE + PRE-COMMIT) and COMMIT (combines COMMIT + DECIDE).
 type Config struct {
 	// ViewTimeout is the timeout for each view before triggering view change.
+	// With 2-phase consensus, each phase should complete in <1.5s for 3s blocks.
 	ViewTimeout time.Duration `yaml:"view_timeout"`
 
 	// BlockTime is the target time between blocks.
+	// With 2-phase optimization, 3-second blocks are achievable (down from 6s).
 	BlockTime time.Duration `yaml:"block_time"`
 
 	// MinValidators is the minimum number of validators required.
@@ -96,7 +100,7 @@ func NewService(ctx context.Context, cfg *Config) (*Service, error) {
 	s := &Service{
 		cfg:          cfg,
 		currentView:  0,
-		currentPhase: PhasePrepare,
+		currentPhase: PhasePropose,
 		blocks:       make(map[[32]byte]*BlockNode),
 		blocksByView: make(map[uint64]*BlockNode),
 		qcBuilders:   make(map[uint64]map[Phase]*QCBuilder),
@@ -195,7 +199,7 @@ func (s *Service) initializeGenesis() error {
 	genesisHash := [32]byte{} // Genesis hash is all zeros
 	s.genesisBlock = &BlockNode{
 		Block:  genesisBlock,
-		Status: StatusDecided,
+		Status: StatusExecuted,
 	}
 
 	s.blocks[genesisHash] = s.genesisBlock

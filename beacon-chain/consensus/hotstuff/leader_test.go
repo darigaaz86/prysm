@@ -8,8 +8,8 @@ import (
 // Full integration tests should be done at a higher level
 
 func TestPhaseOrdering(t *testing.T) {
-	// Test that phases have correct ordering
-	phases := []Phase{PhasePrepare, PhasePreCommit, PhaseCommit, PhaseDecide}
+	// Test that phases have correct ordering (2-phase model)
+	phases := []Phase{PhasePropose, PhaseCommit}
 
 	for i := 0; i < len(phases)-1; i++ {
 		if phases[i] >= phases[i+1] {
@@ -19,8 +19,8 @@ func TestPhaseOrdering(t *testing.T) {
 }
 
 func TestBlockStatusOrdering(t *testing.T) {
-	// Test that block statuses have correct ordering
-	statuses := []BlockStatus{StatusProposed, StatusPrepared, StatusPreCommitted, StatusCommitted, StatusDecided}
+	// Test that block statuses have correct ordering (2-phase model)
+	statuses := []BlockStatus{StatusProposed, StatusCommitted, StatusExecuted}
 
 	for i := 0; i < len(statuses)-1; i++ {
 		if statuses[i] >= statuses[i+1] {

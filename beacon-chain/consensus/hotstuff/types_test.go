@@ -9,11 +9,9 @@ func TestPhase_String(t *testing.T) {
 		phase    Phase
 		expected string
 	}{
-		{PhasePrepare, "PREPARE"},
-		{PhasePreCommit, "PRE-COMMIT"},
+		{PhasePropose, "PROPOSE"},
 		{PhaseCommit, "COMMIT"},
-		{PhaseDecide, "DECIDE"},
-		{Phase(99), "UNKNOWN"},
+		{Phase(99), "UNKNOWN(99)"},
 	}
 
 	for _, tt := range tests {
@@ -32,11 +30,9 @@ func TestBlockStatus_String(t *testing.T) {
 		expected string
 	}{
 		{StatusProposed, "PROPOSED"},
-		{StatusPrepared, "PREPARED"},
-		{StatusPreCommitted, "PRE-COMMITTED"},
 		{StatusCommitted, "COMMITTED"},
-		{StatusDecided, "DECIDED"},
-		{BlockStatus(99), "UNKNOWN"},
+		{StatusExecuted, "EXECUTED"},
+		{BlockStatus(99), "UNKNOWN(99)"},
 	}
 
 	for _, tt := range tests {
@@ -73,7 +69,7 @@ func TestHotStuffBlock_Hash(t *testing.T) {
 func TestQuorumCertificate_Basic(t *testing.T) {
 	qc := &QuorumCertificate{
 		View:      1,
-		Phase:     PhasePrepare,
+		Phase:     PhasePropose,
 		BlockHash: [32]byte{1, 2, 3},
 	}
 
@@ -81,7 +77,7 @@ func TestQuorumCertificate_Basic(t *testing.T) {
 	if qc.View != 1 {
 		t.Errorf("QC.View = %d, want 1", qc.View)
 	}
-	if qc.Phase != PhasePrepare {
-		t.Errorf("QC.Phase = %v, want PhasePrepare", qc.Phase)
+	if qc.Phase != PhasePropose {
+		t.Errorf("QC.Phase = %v, want PhasePropose", qc.Phase)
 	}
 }

@@ -20,31 +20,26 @@ type View struct {
 	Leader primitives.ValidatorIndex
 }
 
-// Phase represents the current phase in the HotStuff protocol.
+// Phase represents the current phase in the 2-phase HotStuff protocol.
+// The protocol has been optimized from 4 phases to 2 phases for faster consensus.
 type Phase uint8
 
 const (
-	// PhasePrepare is the first phase where the leader proposes a block.
-	PhasePrepare Phase = iota
-	// PhasePreCommit is the second phase where validators vote on the prepared block.
-	PhasePreCommit
-	// PhaseCommit is the third phase where validators commit to the block.
+	// PhasePropose is the first phase where the leader proposes a block and validators vote.
+	// This phase combines the original PREPARE and PRE-COMMIT phases.
+	PhasePropose Phase = iota
+	// PhaseCommit is the second phase where validators commit and execute the block.
+	// This phase combines the original COMMIT and DECIDE phases.
 	PhaseCommit
-	// PhaseDecide is the final phase where the block is executed.
-	PhaseDecide
 )
 
 // String returns the string representation of the phase.
 func (p Phase) String() string {
 	switch p {
-	case PhasePrepare:
-		return "PREPARE"
-	case PhasePreCommit:
-		return "PRE-COMMIT"
+	case PhasePropose:
+		return "PROPOSE"
 	case PhaseCommit:
 		return "COMMIT"
-	case PhaseDecide:
-		return "DECIDE"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", p)
 	}
@@ -55,7 +50,7 @@ func (p Phase) String() string {
 type QuorumCertificate struct {
 	// View is the view number when this QC was created.
 	View uint64
-	// Phase is the phase this QC represents (PREPARE, PRE-COMMIT, or COMMIT).
+	// Phase is the phase this QC represents (PROPOSE or COMMIT).
 	Phase Phase
 	// BlockHash is the hash of the block this QC certifies.
 	BlockHash [32]byte
@@ -186,16 +181,12 @@ type BlockStatus uint8
 const (
 	// StatusUnknown means the block status is unknown.
 	StatusUnknown BlockStatus = iota
-	// StatusProposed means the block has been proposed.
+	// StatusProposed means the block has been proposed in the PROPOSE phase.
 	StatusProposed
-	// StatusPrepared means the block has a PREPARE QC.
-	StatusPrepared
-	// StatusPreCommitted means the block has a PRE-COMMIT QC.
-	StatusPreCommitted
-	// StatusCommitted means the block has a COMMIT QC.
+	// StatusCommitted means the block has a PROPOSE QC and is in the COMMIT phase.
 	StatusCommitted
-	// StatusDecided means the block has been executed.
-	StatusDecided
+	// StatusExecuted means the block has a COMMIT QC and has been executed.
+	StatusExecuted
 )
 
 // String returns the string representation of the block status.
@@ -205,14 +196,10 @@ func (s BlockStatus) String() string {
 		return "UNKNOWN"
 	case StatusProposed:
 		return "PROPOSED"
-	case StatusPrepared:
-		return "PREPARED"
-	case StatusPreCommitted:
-		return "PRE-COMMITTED"
 	case StatusCommitted:
 		return "COMMITTED"
-	case StatusDecided:
-		return "DECIDED"
+	case StatusExecuted:
+		return "EXECUTED"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", s)
 	}
@@ -224,11 +211,11 @@ type BlockNode struct {
 	Block *HotStuffBlock
 	// Status is the current status of this block.
 	Status BlockStatus
-	// PrepareQC is the PREPARE QC for this block (if any).
-	PrepareQC *QuorumCertificate
-	// PreCommitQC is the PRE-COMMIT QC for this block (if any).
-	PreCommitQC *QuorumCertificate
+	// ProposeQC is the PROPOSE QC for this block (if any).
+	// This QC proves that a quorum voted for the block in the PROPOSE phase.
+	ProposeQC *QuorumCertificate
 	// CommitQC is the COMMIT QC for this block (if any).
+	// This QC proves that a quorum committed to the block in the COMMIT phase.
 	CommitQC *QuorumCertificate
 	// Parent is the parent block node.
 	Parent *BlockNode
@@ -249,7 +236,7 @@ func (n *BlockNode) IsCommitted() bool {
 	return n.Status >= StatusCommitted
 }
 
-// IsDecided returns true if the block has been decided (executed).
-func (n *BlockNode) IsDecided() bool {
-	return n.Status == StatusDecided
+// IsExecuted returns true if the block has been executed.
+func (n *BlockNode) IsExecuted() bool {
+	return n.Status == StatusExecuted
 }

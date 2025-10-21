@@ -35,67 +35,38 @@ func (s *Service) handleBlock(block *HotStuffBlock) error {
 	s.blocks[blockHash] = node
 	s.blocksByView[block.View] = node
 
-	// Process based on current phase
+	// Process based on current phase (2-phase model)
 	switch s.currentPhase {
-	case PhasePrepare:
-		return s.handlePrepare(block, blockHash)
-	case PhasePreCommit:
-		return s.handlePreCommit(block, blockHash)
+	case PhasePropose:
+		return s.handlePropose(block, blockHash)
 	case PhaseCommit:
 		return s.handleCommit(block, blockHash)
-	case PhaseDecide:
-		return s.handleDecide(block, blockHash)
 	default:
 		return fmt.Errorf("unknown phase: %s", s.currentPhase)
 	}
 }
 
-// handlePrepare handles the PREPARE phase.
-func (s *Service) handlePrepare(block *HotStuffBlock, blockHash [32]byte) error {
-	log.WithField("view", block.View).Debug("Handling PREPARE phase")
+// handlePropose handles the PROPOSE phase.
+// This phase combines the original PREPARE and PRE-COMMIT phases for faster consensus.
+func (s *Service) handlePropose(block *HotStuffBlock, blockHash [32]byte) error {
+	log.WithFields(logrus.Fields{
+		"view":      block.View,
+		"blockHash": fmt.Sprintf("%#x", blockHash[:8]),
+	}).Info("🔥 HotStuff: Handling PROPOSE phase")
 
-	// Check if we should vote for this block
-	if !s.shouldVote(block) {
-		log.Debug("Not voting for block in PREPARE phase")
+	// Check if we should vote for this block (combined PREPARE + PRE-COMMIT safety rules)
+	if !s.shouldVotePropose(block) {
+		log.WithField("view", block.View).Debug("🔥 HotStuff: Not voting for block in PROPOSE phase")
 		return nil
 	}
 
-	// Create PREPARE vote
-	vote, err := s.createVote(block, blockHash, PhasePrepare)
+	// Create PROPOSE vote
+	vote, err := s.createVote(block, blockHash, PhasePropose)
 	if err != nil {
-		return errors.Wrap(err, "failed to create PREPARE vote")
+		return errors.Wrap(err, "failed to create PROPOSE vote")
 	}
 
-	// If we're the leader, collect votes
-	if s.isLeader() {
-		return s.collectVote(vote)
-	}
-
-	// Otherwise, send vote to leader
-	return s.sendVoteToLeader(vote)
-}
-
-// handlePreCommit handles the PRE-COMMIT phase.
-func (s *Service) handlePreCommit(block *HotStuffBlock, blockHash [32]byte) error {
-	log.WithField("view", block.View).Debug("Handling PRE-COMMIT phase")
-
-	// Verify we have PREPARE QC
-	node := s.blocks[blockHash]
-	if node.PrepareQC == nil {
-		return errors.New("missing PREPARE QC for PRE-COMMIT phase")
-	}
-
-	// Check if we should vote
-	if !s.shouldVote(block) {
-		log.Debug("Not voting for block in PRE-COMMIT phase")
-		return nil
-	}
-
-	// Create PRE-COMMIT vote
-	vote, err := s.createVote(block, blockHash, PhasePreCommit)
-	if err != nil {
-		return errors.Wrap(err, "failed to create PRE-COMMIT vote")
-	}
+	log.WithField("view", block.View).Debug("🔥 HotStuff: Created PROPOSE vote")
 
 	// If we're the leader, collect votes
 	if s.isLeader() {
@@ -107,21 +78,30 @@ func (s *Service) handlePreCommit(block *HotStuffBlock, blockHash [32]byte) erro
 }
 
 // handleCommit handles the COMMIT phase.
+// This phase combines the original COMMIT and DECIDE phases - it collects votes,
+// builds the CommitQC, executes the block, and advances to the next view.
 func (s *Service) handleCommit(block *HotStuffBlock, blockHash [32]byte) error {
-	log.WithField("view", block.View).Debug("Handling COMMIT phase")
+	log.WithFields(logrus.Fields{
+		"view":      block.View,
+		"blockHash": fmt.Sprintf("%#x", blockHash[:8]),
+	}).Info("🔥 HotStuff: Handling COMMIT phase")
 
-	// Verify we have PRE-COMMIT QC
+	// Verify we have PROPOSE QC
 	node := s.blocks[blockHash]
-	if node.PreCommitQC == nil {
-		return errors.New("missing PRE-COMMIT QC for COMMIT phase")
+	if node.ProposeQC == nil {
+		return errors.New("missing PROPOSE QC for COMMIT phase")
 	}
 
-	// Update locked QC
-	s.lockedQC = node.PreCommitQC
+	// Update locked QC (prevents rollback to earlier blocks)
+	s.lockedQC = node.ProposeQC
+	log.WithFields(logrus.Fields{
+		"view":         block.View,
+		"lockedQCView": node.ProposeQC.View,
+	}).Debug("🔥 HotStuff: Updated locked QC")
 
 	// Check if we should vote
-	if !s.shouldVote(block) {
-		log.Debug("Not voting for block in COMMIT phase")
+	if !s.shouldVoteCommit(block, node) {
+		log.WithField("view", block.View).Debug("🔥 HotStuff: Not voting for block in COMMIT phase")
 		return nil
 	}
 
@@ -130,6 +110,8 @@ func (s *Service) handleCommit(block *HotStuffBlock, blockHash [32]byte) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to create COMMIT vote")
 	}
+
+	log.WithField("view", block.View).Debug("🔥 HotStuff: Created COMMIT vote")
 
 	// If we're the leader, collect votes
 	if s.isLeader() {
@@ -140,50 +122,60 @@ func (s *Service) handleCommit(block *HotStuffBlock, blockHash [32]byte) error {
 	return s.sendVoteToLeader(vote)
 }
 
-// handleDecide handles the DECIDE phase.
-func (s *Service) handleDecide(block *HotStuffBlock, blockHash [32]byte) error {
-	log.WithField("view", block.View).Info("Handling DECIDE phase - executing block")
-
-	// Verify we have COMMIT QC
-	node := s.blocks[blockHash]
-	if node.CommitQC == nil {
-		return errors.New("missing COMMIT QC for DECIDE phase")
-	}
-
-	// Execute block
-	if err := s.executeBlock(block, blockHash); err != nil {
-		return errors.Wrap(err, "failed to execute block")
-	}
-
-	// Update status
-	node.Status = StatusDecided
-
-	// Advance to next view
-	return s.advanceView()
-}
-
-// shouldVote determines if we should vote for a block.
-func (s *Service) shouldVote(block *HotStuffBlock) bool {
-	// Safety rule 1: Block extends from highest QC we know
+// shouldVotePropose determines if we should vote for a block in the PROPOSE phase.
+// This combines the safety rules from the original PREPARE and PRE-COMMIT phases.
+func (s *Service) shouldVotePropose(block *HotStuffBlock) bool {
+	// Safety rule 1: Block must have a JustifyQC
 	if block.JustifyQC == nil {
+		log.WithField("view", block.View).Debug("🔥 HotStuff: Block has no JustifyQC, not voting")
 		return false
 	}
 
+	// Safety rule 2: Block extends from highest QC we know (PREPARE rule)
 	if CompareQC(block.JustifyQC, s.highestQC) < 0 {
-		log.Debug("Block does not extend from highest QC")
+		log.WithFields(logrus.Fields{
+			"view":          block.View,
+			"justifyQCView": block.JustifyQC.View,
+			"highestQCView": s.highestQC.View,
+		}).Debug("🔥 HotStuff: Block does not extend from highest QC, not voting")
 		return false
 	}
 
-	// Safety rule 2: Block extends from locked QC or has higher QC
+	// Safety rule 3: Block extends from locked QC or has higher QC (PRE-COMMIT rule)
 	if s.lockedQC != nil {
 		if CompareQC(block.JustifyQC, s.lockedQC) < 0 {
-			log.Debug("Block does not extend from locked QC")
+			log.WithFields(logrus.Fields{
+				"view":          block.View,
+				"justifyQCView": block.JustifyQC.View,
+				"lockedQCView":  s.lockedQC.View,
+			}).Debug("🔥 HotStuff: Block does not extend from locked QC, not voting")
 			return false
 		}
 	}
 
-	// TODO: Add more safety rules (e.g., valid state transition)
+	log.WithField("view", block.View).Debug("🔥 HotStuff: Safety rules passed, will vote in PROPOSE phase")
+	return true
+}
 
+// shouldVoteCommit determines if we should vote for a block in the COMMIT phase.
+// This phase requires that the block has a valid ProposeQC.
+func (s *Service) shouldVoteCommit(block *HotStuffBlock, node *BlockNode) bool {
+	// Must have ProposeQC
+	if node.ProposeQC == nil {
+		log.WithField("view", block.View).Debug("🔥 HotStuff: Block has no ProposeQC, not voting in COMMIT")
+		return false
+	}
+
+	// Verify ProposeQC is valid
+	if err := VerifyQC(node.ProposeQC, s.publicKeys, s.quorumSize); err != nil {
+		log.WithFields(logrus.Fields{
+			"view":  block.View,
+			"error": err.Error(),
+		}).Warn("🔥 HotStuff: ProposeQC verification failed, not voting in COMMIT")
+		return false
+	}
+
+	log.WithField("view", block.View).Debug("🔥 HotStuff: ProposeQC valid, will vote in COMMIT phase")
 	return true
 }
 
@@ -217,6 +209,10 @@ func (s *Service) collectVote(vote *Vote) error {
 	if builder == nil {
 		builder = NewQCBuilder(vote.View, vote.Phase, vote.BlockHash, s.quorumSize, uint64(len(s.validators)))
 		s.qcBuilders[vote.View][vote.Phase] = builder
+		log.WithFields(logrus.Fields{
+			"view":  vote.View,
+			"phase": vote.Phase,
+		}).Debug("🔥 HotStuff: Created new QC builder")
 	}
 
 	// Add vote to builder
@@ -227,22 +223,40 @@ func (s *Service) collectVote(vote *Vote) error {
 
 	if !added {
 		// Duplicate vote, ignore
+		log.WithFields(logrus.Fields{
+			"view":           vote.View,
+			"phase":          vote.Phase,
+			"validatorIndex": vote.ValidatorIndex,
+		}).Debug("🔥 HotStuff: Duplicate vote ignored")
 		return nil
 	}
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logrus.Fields{
 		"view":       vote.View,
 		"phase":      vote.Phase,
 		"voteCount":  builder.VoteCount(),
 		"quorumSize": s.quorumSize,
-	}).Debug("Collected vote")
+	}).Debug("🔥 HotStuff: Collected vote")
 
 	// Check if we have quorum
 	if builder.HasQuorum() {
+		// Clean up old builders (keep only last 2 views)
+		s.cleanupOldBuilders(vote.View)
 		return s.onQuorumReached(vote.View, vote.Phase, vote.BlockHash, builder)
 	}
 
 	return nil
+}
+
+// cleanupOldBuilders removes QC builders for old views to prevent memory leaks.
+func (s *Service) cleanupOldBuilders(currentView uint64) {
+	for view := range s.qcBuilders {
+		// Keep builders for current view and previous view only
+		if view < currentView-1 {
+			delete(s.qcBuilders, view)
+			log.WithField("view", view).Debug("🔥 HotStuff: Cleaned up old QC builders")
+		}
+	}
 }
 
 // onQuorumReached is called when a quorum is reached for a phase.
@@ -265,20 +279,36 @@ func (s *Service) onQuorumReached(view uint64, phase Phase, blockHash [32]byte, 
 	}
 
 	switch phase {
-	case PhasePrepare:
-		node.PrepareQC = qc
-		node.Status = StatusPrepared
-		return s.advancePhase(PhasePreCommit, qc)
-
-	case PhasePreCommit:
-		node.PreCommitQC = qc
-		node.Status = StatusPreCommitted
+	case PhasePropose:
+		// PROPOSE quorum reached - build ProposeQC and advance to COMMIT
+		node.ProposeQC = qc
+		node.Status = StatusProposed
+		log.WithFields(logrus.Fields{
+			"view":      view,
+			"blockHash": fmt.Sprintf("%#x", blockHash[:8]),
+		}).Info("🔥 HotStuff: ProposeQC built, advancing to COMMIT phase")
 		return s.advancePhase(PhaseCommit, qc)
 
 	case PhaseCommit:
+		// COMMIT quorum reached - build CommitQC, execute block, advance to next view
 		node.CommitQC = qc
 		node.Status = StatusCommitted
-		return s.advancePhase(PhaseDecide, qc)
+		log.WithFields(logrus.Fields{
+			"view":      view,
+			"blockHash": fmt.Sprintf("%#x", blockHash[:8]),
+		}).Info("🔥 HotStuff: CommitQC built, executing block")
+
+		// Execute the block
+		if err := s.executeBlock(node.Block, blockHash); err != nil {
+			return errors.Wrap(err, "failed to execute block")
+		}
+
+		// Update status to executed
+		node.Status = StatusExecuted
+		log.WithField("view", view).Info("🔥 HotStuff: Block executed, advancing to next view")
+
+		// Advance to next view
+		return s.advanceView()
 
 	default:
 		return fmt.Errorf("unexpected phase for quorum: %s", phase)
@@ -286,17 +316,28 @@ func (s *Service) onQuorumReached(view uint64, phase Phase, blockHash [32]byte, 
 }
 
 // advancePhase advances to the next phase.
+// In the 2-phase model, this only handles PhasePropose → PhaseCommit transition.
 func (s *Service) advancePhase(nextPhase Phase, qc *QuorumCertificate) error {
-	log.WithFields(map[string]interface{}{
+	log.WithFields(logrus.Fields{
 		"from": s.currentPhase,
 		"to":   nextPhase,
-	}).Info("Advancing phase")
+		"view": s.currentView,
+	}).Info("🔥 HotStuff: Advancing phase")
+
+	// Validate phase transition (only PROPOSE → COMMIT is valid)
+	if s.currentPhase == PhasePropose && nextPhase != PhaseCommit {
+		return fmt.Errorf("invalid phase transition from %s to %s", s.currentPhase, nextPhase)
+	}
 
 	s.currentPhase = nextPhase
 
 	// Update highest QC
 	if CompareQC(qc, s.highestQC) > 0 {
 		s.highestQC = qc
+		log.WithFields(logrus.Fields{
+			"view":   s.currentView,
+			"qcView": qc.View,
+		}).Debug("🔥 HotStuff: Updated highest QC")
 	}
 
 	// Reset view timer
@@ -311,17 +352,22 @@ func (s *Service) advancePhase(nextPhase Phase, qc *QuorumCertificate) error {
 }
 
 // advanceView advances to the next view.
+// This is called after a block is executed in the COMMIT phase.
 func (s *Service) advanceView() error {
 	s.currentView++
-	s.currentPhase = PhasePrepare
+	s.currentPhase = PhasePropose
 
-	log.WithField("view", s.currentView).Info("Advanced to next view")
+	log.WithFields(logrus.Fields{
+		"view":  s.currentView,
+		"phase": s.currentPhase,
+	}).Info("🔥 HotStuff: Advanced to next view")
 
 	// Reset view timer
 	s.resetViewTimer()
 
 	// If we're the new leader, propose a block
 	if s.isLeader() {
+		log.WithField("view", s.currentView).Info("🔥 HotStuff: I am the leader, proposing block")
 		return s.proposeBlock()
 	}
 

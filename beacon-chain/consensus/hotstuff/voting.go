@@ -182,7 +182,7 @@ func (s *Service) changeView(newView uint64, highestQC *QuorumCertificate) error
 	}).Info("Changing view")
 
 	s.currentView = newView
-	s.currentPhase = PhasePrepare
+	s.currentPhase = PhasePropose
 
 	// Update highest QC if provided
 	if highestQC != nil && CompareQC(highestQC, s.highestQC) > 0 {

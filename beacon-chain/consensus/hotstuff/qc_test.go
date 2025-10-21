@@ -9,7 +9,7 @@ import (
 
 func TestQCBuilder_Basic(t *testing.T) {
 	blockHash := [32]byte{1, 2, 3}
-	builder := NewQCBuilder(1, PhasePrepare, blockHash, 7, 10)
+	builder := NewQCBuilder(1, PhasePropose, blockHash, 7, 10)
 
 	// Test basic properties
 	if builder.VoteCount() != 0 {
@@ -65,19 +65,19 @@ func TestCompareQC(t *testing.T) {
 		{
 			name:     "same view, qc1 higher phase",
 			qc1:      &QuorumCertificate{View: 1, Phase: PhaseCommit},
-			qc2:      &QuorumCertificate{View: 1, Phase: PhasePrepare},
+			qc2:      &QuorumCertificate{View: 1, Phase: PhasePropose},
 			expected: 1,
 		},
 		{
 			name:     "same view, qc2 higher phase",
-			qc1:      &QuorumCertificate{View: 1, Phase: PhasePrepare},
+			qc1:      &QuorumCertificate{View: 1, Phase: PhasePropose},
 			qc2:      &QuorumCertificate{View: 1, Phase: PhaseCommit},
 			expected: -1,
 		},
 		{
 			name:     "equal",
-			qc1:      &QuorumCertificate{View: 1, Phase: PhasePrepare},
-			qc2:      &QuorumCertificate{View: 1, Phase: PhasePrepare},
+			qc1:      &QuorumCertificate{View: 1, Phase: PhasePropose},
+			qc2:      &QuorumCertificate{View: 1, Phase: PhasePropose},
 			expected: 0,
 		},
 	}
@@ -106,25 +106,24 @@ func TestHighestQC(t *testing.T) {
 		{
 			name: "single QC",
 			qcs: []*QuorumCertificate{
-				{View: 1, Phase: PhasePrepare},
+				{View: 1, Phase: PhasePropose},
 			},
-			expected: &QuorumCertificate{View: 1, Phase: PhasePrepare},
+			expected: &QuorumCertificate{View: 1, Phase: PhasePropose},
 		},
 		{
 			name: "multiple QCs, highest by view",
 			qcs: []*QuorumCertificate{
-				{View: 1, Phase: PhasePrepare},
-				{View: 3, Phase: PhasePrepare},
-				{View: 2, Phase: PhasePrepare},
+				{View: 1, Phase: PhasePropose},
+				{View: 3, Phase: PhasePropose},
+				{View: 2, Phase: PhasePropose},
 			},
-			expected: &QuorumCertificate{View: 3, Phase: PhasePrepare},
+			expected: &QuorumCertificate{View: 3, Phase: PhasePropose},
 		},
 		{
 			name: "multiple QCs, same view, highest by phase",
 			qcs: []*QuorumCertificate{
-				{View: 1, Phase: PhasePrepare},
+				{View: 1, Phase: PhasePropose},
 				{View: 1, Phase: PhaseCommit},
-				{View: 1, Phase: PhasePreCommit},
 			},
 			expected: &QuorumCertificate{View: 1, Phase: PhaseCommit},
 		},
